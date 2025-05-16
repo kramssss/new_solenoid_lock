@@ -37,6 +37,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.8.1/firebase-database-compat.js"></script>
 
 <script>
+  
   // Your web app's Firebase configuration (replace with your actual config)
   const firebaseConfig = {
     apiKey: "AIzaSyANFDLKZuHf4qP5GuuyDYfuFK4OAcAEi64",
@@ -164,11 +165,21 @@ firebase.auth().signInWithEmailAndPassword(email, password)
       </form>
       <p class='mt-3'><a href='#' onclick='showLogin()'>Back to Login</a></p>
     `;
-    document.getElementById('signupForm').addEventListener('submit', (e) => {
-      e.preventDefault();
-      alert('Account created (demo). Please login.');
-      showLogin();
-    });
+  document.getElementById('signupForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const email = document.getElementById('newuser').value;
+    const password = document.getElementById('newpass').value;
+
+    firebase.auth().createUserWithEmailAndPassword(email, password)
+      .then((userCredential) => {
+        alert('Account created successfully. Please login.');
+        showLogin();
+      })
+      .catch((error) => {
+        alert('Signup failed: ' + error.message);
+      });
+  });
+
   }
 
   // Home page with PIN input
@@ -226,92 +237,118 @@ firebase.auth().signInWithEmailAndPassword(email, password)
     document.getElementById('display').innerText = '';
   }
 
-  function checkPin() {
-    fetch('/api/unlock', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pin: enteredPin })
-    })
-    .then(res => res.json())
-    .then(data => {
-      if (data.status === "success") {
-        lockStatus = "Open";
-        message = "✅ Access Granted!";
-        logs.push({ time: new Date().toLocaleTimeString(), event: "Access Granted" });
-      } else {
-        lockStatus = "Locked";
-        message = "❌ Wrong PIN!";
-        logs.push({ time: new Date().toLocaleTimeString(), event: "Access Denied" });
-      }
-      enteredPin = "";
-      showHome();
-    })
-    .catch(() => {
-      message = "⚠️ Failed to connect to device.";
-      showHome();
-    });
+function checkPin() {
+  const db = firebase.database();
+
+  // Fetch current correct PIN from Firebase
+  db.ref("correct_pin").once("value").then(snapshot => {
+    const correctPin = snapshot.val() || currentPin;
+
+    if (enteredPin === correctPin) {
+      lockStatus = "unlock";
+      message = "Unlocked successfully!";
+      logs.push({ time: new Date().toLocaleString(), action: "Unlocked" });
+
+      // Update lock status to "unlock"
+      db.ref("lock_status").set("unlock");
+
+      // After 2 seconds, revert lock status back to "lock"
+      setTimeout(() => {
+        db.ref("lock_status").set("lock");
+      }, 2000); // 2000 ms = 2 seconds
+
+    } else {
+      message = "Incorrect PIN. Try again.";
+      logs.push({ time: new Date().toLocaleString(), action: "Failed attempt" });
+
+      // Log failed attempt
+      db.ref("failed_attempts").push({
+        pin: enteredPin,
+        time: Date.now()
+      });
+    }
+
+    showHome(); // Update the UI
+  }).catch(error => {
+    console.error("Error checking PIN:", error);
+    message = "Error checking PIN. Try again.";
+    showHome();
+  });
+}
+
+  function showPage(page) {
+    if (!isLoggedIn) {
+      showLogin();
+      return;
+    }
+    switch (page) {
+      case 'home': showHome(); break;
+      case 'changePin': showChangePin(); break;
+      case 'logBook': showLogBook(); break;
+      case 'settings': showSettings(); break;
+      case 'help': showHelp(); break;
+    }
   }
 
 
-  // Change PIN page
   function showChangePin() {
     setActiveNav('Change PIN');
     document.getElementById('content').innerHTML = `
       <h1 class="mb-4">Change PIN</h1>
-      <form id="changePinForm" style="max-width:400px; margin:auto;">
-        <div class="mb-3">
-          <label for="oldPin" class="form-label">Current PIN</label>
-          <input type="password" class="form-control" id="oldPin" maxlength="4" required>
+      <form id="changePinForm" style="max-width:400px;margin:auto;">
+        <div class='mb-3'>
+          <label class='form-label'>Current PIN</label>
+          <input class='form-control' type='password' id="currentPinInput" required>
         </div>
-        <div class="mb-3">
-          <label for="newPin" class="form-label">New PIN</label>
-          <input type="password" class="form-control" id="newPin" maxlength="4" required>
+        <div class='mb-3'>
+          <label class='form-label'>New PIN</label>
+          <input class='form-control' type='password' id="newPinInput" required>
         </div>
-        <div class="mb-3">
-          <label for="confirmPin" class="form-label">Confirm New PIN</label>
-          <input type="password" class="form-control" id="confirmPin" maxlength="4" required>
+        <div class='mb-3'>
+          <label class='form-label'>Confirm New PIN</label>
+          <input class='form-control' type='password' id="confirmPinInput" required>
         </div>
-        <button type="submit" class="btn btn-primary w-100">Change PIN</button>
+        <button class='btn btn-primary w-100' type='submit'>Change PIN</button>
       </form>
-      <div id="changePinMsg" class="mt-3"></div>
     `;
 
     document.getElementById('changePinForm').addEventListener('submit', (e) => {
       e.preventDefault();
-      const oldPin = document.getElementById('oldPin').value;
-      const newPin = document.getElementById('newPin').value;
-      const confirmPin = document.getElementById('confirmPin').value;
-      const msgBox = document.getElementById('changePinMsg');
+      const db = firebase.database();
+      const currentPinEntered = document.getElementById('currentPinInput').value;
+      const newPin = document.getElementById('newPinInput').value;
+      const confirmPin = document.getElementById('confirmPinInput').value;
 
-      if (newPin.length !== 4 || confirmPin.length !== 4) {
-        msgBox.innerHTML = `<div class="alert alert-danger">PIN must be exactly 4 digits.</div>`;
-        return;
-      }
-      if (newPin !== confirmPin) {
-        msgBox.innerHTML = `<div class="alert alert-danger">New PIN and Confirm PIN do not match.</div>`;
-        return;
-      }
+      // Get current correct PIN from Firebase
+      db.ref("correct_pin").once("value").then(snapshot => {
+        const correctPin = snapshot.val() || currentPin;
 
-      fetch('/api/change-pin', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ oldPin, newPin })
-      })
-      .then(res => res.json())
-      .then(data => {
-        if (data.status === 'success') {
-          msgBox.innerHTML = `<div class="alert alert-success">PIN changed successfully.</div>`;
-          currentPin = newPin;
-        } else {
-          msgBox.innerHTML = `<div class="alert alert-danger">${data.message || 'Failed to change PIN.'}</div>`;
+        if (currentPinEntered !== correctPin) {
+          alert("Incorrect current PIN.");
+          return;
         }
-      })
-      .catch(() => {
-        msgBox.innerHTML = `<div class="alert alert-warning">Connection error.</div>`;
+
+        if (newPin !== confirmPin) {
+          alert("New PINs do not match.");
+          return;
+        }
+
+        // Save new PIN to Firebase
+        db.ref("correct_pin").set(newPin)
+          .then(() => {
+            alert("PIN changed successfully.");
+            showHome();
+          })
+          .catch((error) => {
+            alert("Failed to change PIN: " + error.message);
+          });
+
+      }).catch(error => {
+        alert("Error fetching PIN: " + error.message);
       });
     });
-
   }
+
 
   // Log Book page
   function showLogBook() {
@@ -344,21 +381,76 @@ firebase.auth().signInWithEmailAndPassword(email, password)
   function showSettings() {
     setActiveNav('Settings');
     document.getElementById('content').innerHTML = `
-      <h1 class="mb-4">Settings</h1>
-      <p>For assistance, contact toongmarkjohnr31@gmail.com.</p>
-      <p>This page is under development</p>
+      <h1 class="mb-4 text-2xl font-bold">Settings</h1>
+      
+      <div class="mb-6">
+        <h2 class="text-xl font-semibold mb-2">Account Settings</h2>
+        <form class="space-y-4">
+          <div>
+            <label class="block font-medium">Email Address</label>
+            <input type="email" placeholder="Enter your email" class="w-full p-2 border rounded" />
+          </div>
+          <div>
+            <label class="block font-medium">Change Password</label>
+            <input type="password" placeholder="New Password" class="w-full p-2 border rounded" />
+          </div>
+          <div>
+            <label class="block font-medium">Confirm Password</label>
+            <input type="password" placeholder="Confirm Password" class="w-full p-2 border rounded" />
+          </div>
+          <button type="submit" class="bg-blue-500 text-white px-4 py-2 rounded hover:bg-blue-600">Save Changes</button>
+        </form>
+      </div>
+
+      <div class="mb-6">
+        <h2 class="text-xl font-semibold mb-2">Notifications</h2>
+        <div class="flex items-center space-x-2">
+          <input type="checkbox" id="emailNotifications" class="mr-2">
+          <label for="emailNotifications">Enable email notifications</label>
+        </div>
+      </div>
+
+      <div class="mt-6 text-gray-600">
+        <p>For assistance, contact <a href="mailto:toongmarkjohnr31@gmail.com" class="text-blue-600 underline">toongmarkjohnr31@gmail.com</a>.</p>
+        <p>This page is still under development.</p>
+      </div>
     `;
   }
+
 
   // Help page (dummy)
   function showHelp() {
     setActiveNav('Help');
     document.getElementById('content').innerHTML = `
-      <h1 class="mb-4">Help</h1>
-      <p>For assistance, contact toongmarkjohnr31@gmail.com</p>
-      <p>This page is under development.</p>
+      <h1 class="mb-4 text-2xl font-bold">Help & Support</h1>
+
+      <div class="mb-6">
+        <h2 class="text-xl font-semibold mb-2">Getting Started</h2>
+        <p class="mb-2">To use this application, navigate through the navigation bar and choose the section you want to access (e.g., home, change pin, Log book, etc.).</p>
+        <p>If you're new, make sure to complete your profile in the <strong>Settings</strong> section first.</p>
+      </div>
+
+      <div class="mb-6">
+        <h2 class="text-xl font-semibold mb-2">Frequently Asked Questions</h2>
+        <ul class="list-disc pl-5 space-y-2">
+          <li><strong>How do I reset my password?</strong><br>Go to <em>Settings</em> > Enter a new password > Save changes.</li>
+          <li><strong>Why am I not receiving notifications?</strong><br>Ensure that notifications are enabled in the <em>Settings</em> page.</li>
+          <li><strong>Can I access this on mobile?</strong><br>Yes, the interface is mobile-friendly. Use any modern browser.</li>
+        </ul>
+      </div>
+
+      <div class="mb-6">
+        <h2 class="text-xl font-semibold mb-2">Contact Support</h2>
+        <p>If you encounter any issues or have questions, feel free to contact us:</p>
+        <ul class="pl-5 mt-2">
+          <li>Email: <a href="mailto:toongmarkjohnr31@gmail.com" class="text-blue-600 underline">toongmarkjohnr31@gmail.com</a></li>
+        </ul>
+      </div>
+
+      <p class="text-gray-500">This page is still under development. More resources will be added soon.</p>
     `;
   }
+
 
   // Logout
   function logout() {
